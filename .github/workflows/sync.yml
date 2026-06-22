@@ -1,6 +1,9 @@
 name: Clash Report Sync
 
 on:
+  push:
+    branches:
+      - main              # Runs automatically whenever changes are saved (committed) to the main branch
   schedule:
     - cron: '*/15 * * * *' # Runs automatically every 15 minutes
   workflow_dispatch:      # Allows manual trigger via the UI
@@ -22,7 +25,7 @@ jobs:
           pip install requests beautifulsoup4 deep-translator
 
       - name: Run sync script
-        run: python test_script.py
+        run: python sync_script.py
 
       - name: Commit and push state
         run: |
