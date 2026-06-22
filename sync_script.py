@@ -15,34 +15,40 @@ def get_last_processed_id():
         try:
             with open(STATE_FILE, "r") as f:
                 content = f.read().strip()
-                return int(content) if content else 0
-        except Exception:
-            return 0
+                if content:
+                    return int(content)
+        except Exception as e:
+            print(f"[DEBUG] Error reading state file: {e}")
     return 0
 
 def save_last_processed_id(last_id):
-    with open(STATE_FILE, "w") as f:
-        f.write(str(last_id))
+    try:
+        with open(STATE_FILE, "w") as f:
+            f.write(str(last_id))
+        print(f"[DEBUG] Saved last_id.txt with ID: {last_id}")
+    except Exception as e:
+        print(f"[DEBUG] Error writing state file: {e}")
 
 def scrape_channel():
     url = f"https://t.me/s/{SOURCE_CHANNEL}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    print(f"[DEBUG] Fetching URL: {url}")
     response = requests.get(url, headers=headers)
+    print(f"[DEBUG] HTTP Status Code: {response.status_code}")
+    
     if response.status_code != 200:
-        print("Error: Could not retrieve web preview.")
+        print("[DEBUG] Failed to load the public web preview page.")
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
-    messages = soup.find_all("div", class_="tgme_widget_message_wrap")
+    # Finding messages via the core class selector
+    messages = soup.select(".tgme_widget_message")
+    print(f"[DEBUG] Found {len(messages)} elements with class 'tgme_widget_message'")
     
     parsed_posts = []
-    for msg in messages:
-        msg_body = msg.find("div", class_="tgme_widget_message")
-        if not msg_body:
-            continue
-        
+    for msg_body in messages:
         data_post = msg_body.get("data-post")
         if not data_post:
             continue
@@ -55,15 +61,15 @@ def scrape_channel():
         post_link = f"https://t.me/{data_post}"
         
         # Text extraction
-        text_elem = msg_body.find("div", class_="tgme_widget_message_text")
+        text_elem = msg_body.select_one(".tgme_widget_message_text")
         text = text_elem.get_text() if text_elem else ""
         
         # Video extraction
-        video_elem = msg_body.find("video", class_="tgme_widget_message_video")
+        video_elem = msg_body.select_one("video.tgme_widget_message_video")
         video_url = video_elem.get("src") if video_elem else None
         
-        # Photo/Screenshot extraction
-        photo_elem = msg_body.find("a", class_="tgme_widget_message_photo_wrap")
+        # Photo extraction
+        photo_elem = msg_body.select_one(".tgme_widget_message_photo_wrap")
         photo_url = None
         if photo_elem:
             style = photo_elem.get("style", "")
@@ -85,11 +91,11 @@ def translate_to_persian(text):
     if not text:
         return ""
     try:
-        # Translates Turkish/English to Persian
         translated = GoogleTranslator(source='auto', target='fa').translate(text)
+        print(f"[DEBUG] Successfully translated caption to Persian.")
         return translated
     except Exception as e:
-        print(f"Translation error: {e}")
+        print(f"[DEBUG] Translation warning: {e}")
         return text
 
 def send_to_telegram(media_type, media_url, caption):
@@ -122,42 +128,41 @@ def send_to_telegram(media_type, media_url, caption):
         response = requests.post(url, json=payload, timeout=20)
         return response.json()
     except Exception as e:
-        print(f"Failed to send message: {e}")
+        print(f"[DEBUG] Network error calling Telegram API: {e}")
         return None
 
 def main():
     last_id = get_last_processed_id()
-    print(f"Last processed ID: {last_id}")
+    print(f"[DEBUG] Current stored last_id: {last_id}")
     
     posts = scrape_channel()
     if not posts:
-        print("No posts found.")
+        print("[DEBUG] No posts were successfully parsed. Exiting script.")
         return
         
     posts = sorted(posts, key=lambda x: x["id"])
+    print(f"[DEBUG] Scraped post IDs range from {posts[0]['id']} to {posts[-1]['id']}")
     
-    # Initialize state file on the first run to prevent spamming old posts
     if last_id == 0:
         latest_id = posts[-1]["id"]
         save_last_processed_id(latest_id)
-        print(f"Initialized last_id.txt with the latest ID: {latest_id}. Future posts will be processed.")
+        print(f"[DEBUG] First run initialization complete. Set last_id to {latest_id}.")
         return
 
     new_posts = [p for p in posts if p["id"] > last_id]
     
     if not new_posts:
-        print("No new posts.")
+        print("[DEBUG] No new posts detected above last_id.")
         return
         
-    print(f"Processing {len(new_posts)} new posts...")
+    print(f"[DEBUG] Found {len(new_posts)} new posts to process.")
     
     for post in new_posts:
-        print(f"Processing ID: {post['id']}")
+        print(f"\n--- Processing Post {post['id']} ---")
         
         translated_text = translate_to_persian(post["text"])
         escaped_text = html.escape(translated_text) if translated_text else ""
         
-        # Telegram blockquote wrapper for quotation style styling
         if escaped_text:
             caption = f"<blockquote>{escaped_text}</blockquote>\n\n"
         else:
@@ -165,24 +170,43 @@ def main():
             
         caption += f'<a href="{post["link"]}">Clash Report 🇹🇷</a>\n🫰secretollah'
         
+        # Decide media type
         if post["video_url"]:
             media_type = "video"
             media_url = post["video_url"]
+            print(f"[DEBUG] Detected Video Post. URL: {media_url}")
         elif post["photo_url"]:
             media_type = "photo"
             media_url = post["photo_url"]
+            print(f"[DEBUG] Detected Photo Post. URL: {media_url}")
         else:
             media_type = "text"
             media_url = None
+            print("[DEBUG] Detected Text-Only Post.")
             
         res = send_to_telegram(media_type, media_url, caption)
+        print(f"[DEBUG] Telegram Response for {post['id']}: {res}")
+        
         if res and res.get("ok"):
-            print(f"Successfully sent ID {post['id']}")
+            print(f"[DEBUG] Successfully posted ID {post['id']} to Telegram.")
             last_id = post["id"]
             save_last_processed_id(last_id)
         else:
-            print(f"Failed to send ID {post['id']}: {res}")
-            # Move queue forward even if posting fails to prevent getting stuck
+            # If sending photo or video failed (sometimes CDN URLs expire or are temporarily unreachable), 
+            # attempt to send as text-only so the channel is still updated.
+            if media_type != "text":
+                print(f"[DEBUG] Media send failed. Retrying post {post['id']} as text-only.")
+                text_fallback_caption = f"{caption}\n\n<i>(Media attachment failed to send)</i>"
+                fallback_res = send_to_telegram("text", None, text_fallback_caption)
+                print(f"[DEBUG] Telegram Fallback Response: {fallback_res}")
+                if fallback_res and fallback_res.get("ok"):
+                    print(f"[DEBUG] Fallback successfully posted ID {post['id']}.")
+                    last_id = post["id"]
+                    save_last_processed_id(last_id)
+                    continue
+            
+            print(f"[ERROR] Failed to post ID {post['id']}.")
+            # Progress queue forward anyway to avoid infinite retries on corrupted posts
             last_id = post["id"]
             save_last_processed_id(last_id)
 
