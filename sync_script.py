@@ -43,7 +43,6 @@ def scrape_channel():
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
-    # Finding messages via the core class selector
     messages = soup.select(".tgme_widget_message")
     print(f"[DEBUG] Found {len(messages)} elements with class 'tgme_widget_message'")
     
@@ -168,7 +167,8 @@ def main():
         else:
             caption = ""
             
-        caption += f'<a href="{post["link"]}">Clash Report 🇹🇷</a>\n🫰secretollah'
+        # Updated signature and hashtags
+        caption += f'<a href="{post["link"]}">Clash Report 🇹🇷</a>\n🫰@secretollah\n#خبر\n#سیاست'
         
         # Decide media type
         if post["video_url"]:
@@ -192,12 +192,10 @@ def main():
             last_id = post["id"]
             save_last_processed_id(last_id)
         else:
-            # If sending photo or video failed (sometimes CDN URLs expire or are temporarily unreachable), 
-            # attempt to send as text-only so the channel is still updated.
+            # If sending media fails, retry sending as text-only with the clean caption
             if media_type != "text":
                 print(f"[DEBUG] Media send failed. Retrying post {post['id']} as text-only.")
-                text_fallback_caption = f"{caption}\n\n<i>(Media attachment failed to send)</i>"
-                fallback_res = send_to_telegram("text", None, text_fallback_caption)
+                fallback_res = send_to_telegram("text", None, caption)
                 print(f"[DEBUG] Telegram Fallback Response: {fallback_res}")
                 if fallback_res and fallback_res.get("ok"):
                     print(f"[DEBUG] Fallback successfully posted ID {post['id']}.")
