@@ -22,7 +22,7 @@ jobs:
           pip install requests beautifulsoup4 deep-translator
 
       - name: Run sync script
-        run: python sync_script.py
+        run: python test_script.py
 
       - name: Commit and push state
         run: |
