@@ -3,6 +3,7 @@ import re
 import html
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime, timezone
 from deep_translator import GoogleTranslator
 
 BOT_TOKEN = "8259373992:AAFZNTWpHQp2Pf_3nb_gmbquxevI2GeYGeg"
@@ -59,6 +60,10 @@ def scrape_channel():
             
         post_link = f"https://t.me/{data_post}"
         
+        # Date extraction
+        time_elem = msg_body.select_one(".tgme_widget_message_date time")
+        date_str = time_elem.get("datetime") if time_elem else None
+        
         # Text extraction
         text_elem = msg_body.select_one(".tgme_widget_message_text")
         text = text_elem.get_text() if text_elem else ""
@@ -80,6 +85,7 @@ def scrape_channel():
             "id": post_id,
             "link": post_link,
             "text": text.strip(),
+            "date_str": date_str,
             "video_url": video_url,
             "photo_url": photo_url
         })
@@ -143,18 +149,36 @@ def main():
     print(f"[DEBUG] Scraped post IDs range from {posts[0]['id']} to {posts[-1]['id']}")
     
     if last_id == 0:
-        latest_id = posts[-1]["id"]
-        save_last_processed_id(latest_id)
-        print(f"[DEBUG] First run initialization complete. Set last_id to {latest_id}.")
-        return
-
-    new_posts = [p for p in posts if p["id"] > last_id]
+        # First run / Reset state: Pull posts from the last 1 hour
+        print("[DEBUG] First run or reset detected. Filtering posts from the last 1 hour...")
+        new_posts = []
+        now_utc = datetime.now(timezone.utc)
+        
+        for post in posts:
+            if post["date_str"]:
+                try:
+                    post_time = datetime.fromisoformat(post["date_str"])
+                    time_diff = now_utc - post_time
+                    diff_seconds = time_diff.total_seconds()
+                    
+                    # If published in the last 1 hour (3600 seconds)
+                    if 0 <= diff_seconds <= 3600:
+                        new_posts.append(post)
+                        print(f"[DEBUG] Post {post['id']} was published {int(diff_seconds // 60)} minutes ago. Selected.")
+                except Exception as e:
+                    print(f"[DEBUG] Error parsing date for post {post['id']}: {e}")
+                    
+        if not new_posts:
+            print("[DEBUG] No posts found in the last 1 hour. Selecting the absolute latest 1 post to test.")
+            new_posts = [posts[-1]]
+    else:
+        new_posts = [p for p in posts if p["id"] > last_id]
     
     if not new_posts:
         print("[DEBUG] No new posts detected above last_id.")
         return
         
-    print(f"[DEBUG] Found {len(new_posts)} new posts to process.")
+    print(f"[DEBUG] Found {len(new_posts)} posts to process.")
     
     for post in new_posts:
         print(f"\n--- Processing Post {post['id']} ---")
