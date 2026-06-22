@@ -1,0 +1,32 @@
+name: Clash Report Sync
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # Runs automatically every 15 minutes
+  workflow_dispatch:      # Allows manual trigger via the UI
+
+jobs:
+  run-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 deep-translator
+
+      - name: Run sync script
+        run: python sync_script.py
+
+      - name: Commit and push state
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add last_id.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "update: track last processed ID" && git push)
