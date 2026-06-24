@@ -1,12 +1,12 @@
 name: Clash Report Sync
 
 on:
+  repository_dispatch:
+    types: [trigger_sync] # Listens for the external trigger from cron-job.org
   push:
     branches:
-      - main              # Runs automatically whenever changes are saved (committed) to the main branch
-  schedule:
-    - cron: '*/15 * * * *' # Runs automatically every 15 minutes
-  workflow_dispatch:      # Allows manual trigger via the UI
+      - main
+  workflow_dispatch:      # Keeps the manual button active
 
 jobs:
   run-sync:
