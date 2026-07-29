@@ -26,6 +26,9 @@ jobs:
 
       - name: Run sync script
         run: python sync_script.py
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
 
       - name: Commit and push state
         run: |
