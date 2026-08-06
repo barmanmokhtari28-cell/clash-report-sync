@@ -1,6 +1,7 @@
 import os
 import re
 import html
+import time
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
@@ -64,9 +65,15 @@ def scrape_channel():
         time_elem = msg_body.select_one(".tgme_widget_message_date time")
         date_str = time_elem.get("datetime") if time_elem else None
 
-        # Text extraction
+        # Text extraction (Fix line breaks & paragraph formatting)
         text_elem = msg_body.select_one(".tgme_widget_message_text")
-        text = text_elem.get_text() if text_elem else ""
+        if text_elem:
+            # Replace HTML <br> tags with line breaks before getting text
+            for br in text_elem.find_all("br"):
+                br.replace_with("\n")
+            text = text_elem.get_text()
+        else:
+            text = ""
 
         # Video extraction
         video_elem = msg_body.select_one("video.tgme_widget_message_video")
@@ -92,16 +99,31 @@ def scrape_channel():
 
     return parsed_posts
 
-def translate_to_persian(text):
+def translate_to_persian(text, max_retries=3):
     if not text:
         return ""
-    try:
-        translated = GoogleTranslator(source='auto', target='fa').translate(text)
-        print(f"[DEBUG] Successfully translated caption to Persian.")
-        return translated
-    except Exception as e:
-        print(f"[DEBUG] Translation warning: {e}")
-        return text
+
+    error_indicators = ["Error 500", "Server Error", "That’s an error", "That's an error"]
+
+    for attempt in range(max_retries):
+        try:
+            translated = GoogleTranslator(source='auto', target='fa').translate(text)
+            
+            # Check if Google returned an error response page instead of translation
+            if translated and any(indicator in translated for indicator in error_indicators):
+                print(f"[DEBUG] Translation attempt {attempt + 1} received Google Error page text. Retrying...")
+                time.sleep(2)
+                continue
+
+            if translated:
+                print(f"[DEBUG] Successfully translated caption to Persian.")
+                return translated
+        except Exception as e:
+            print(f"[DEBUG] Translation attempt {attempt + 1} failed: {e}")
+            time.sleep(2)
+
+    print("[DEBUG] Translation failed after max retries. Retaining original text as fallback.")
+    return text
 
 def send_to_telegram(media_type, media_url, caption):
     if media_type == "video":
@@ -191,7 +213,7 @@ def main():
         else:
             caption = ""
 
-        # Updated signature and hashtags
+        # Signature and hashtags
         caption += f'<a href="{post["link"]}">Clash Report 🇹🇷</a>\n🫰@secretollah\n#خبر\n#سیاست'
 
         # Decide media type
@@ -216,7 +238,7 @@ def main():
             last_id = post["id"]
             save_last_processed_id(last_id)
         else:
-            # If sending media fails, retry sending as text-only with the clean caption
+            # Fallback to text-only if media sending fails
             if media_type != "text":
                 print(f"[DEBUG] Media send failed. Retrying post {post['id']} as text-only.")
                 fallback_res = send_to_telegram("text", None, caption)
@@ -228,7 +250,6 @@ def main():
                     continue
 
             print(f"[ERROR] Failed to post ID {post['id']}.")
-            # Progress queue forward anyway to avoid infinite retries on corrupted posts
             last_id = post["id"]
             save_last_processed_id(last_id)
 
