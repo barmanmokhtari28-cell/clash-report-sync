@@ -5,7 +5,6 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
-from deep_translator import GoogleTranslator
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL_ID = os.environ["CHANNEL_ID"]
@@ -68,7 +67,6 @@ def scrape_channel():
         # Text extraction (Fix line breaks & paragraph formatting)
         text_elem = msg_body.select_one(".tgme_widget_message_text")
         if text_elem:
-            # Replace HTML <br> tags with line breaks before getting text
             for br in text_elem.find_all("br"):
                 br.replace_with("\n")
             text = text_elem.get_text()
@@ -100,24 +98,41 @@ def scrape_channel():
     return parsed_posts
 
 def translate_to_persian(text, max_retries=3):
-    if not text:
+    """
+    Translates text to Persian using Google's direct JSON endpoint (client=gtx).
+    Free, unlimited, requires no API keys or proxies, and won't trigger Google's HTML error blocks.
+    """
+    if not text or not text.strip():
         return ""
 
-    error_indicators = ["Error 500", "Server Error", "That’s an error", "That's an error"]
+    url = "https://translate.googleapis.com/translate_a/single"
+    params = {
+        "client": "gtx",
+        "sl": "auto",
+        "tl": "fa",
+        "dt": "t"
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
 
     for attempt in range(max_retries):
         try:
-            translated = GoogleTranslator(source='auto', target='fa').translate(text)
+            # Using POST so large multi-paragraph captions don't exceed URL limits
+            response = requests.post(url, params=params, data={"q": text}, headers=headers, timeout=15)
             
-            # Check if Google returned an error response page instead of translation
-            if translated and any(indicator in translated for indicator in error_indicators):
-                print(f"[DEBUG] Translation attempt {attempt + 1} received Google Error page text. Retrying...")
-                time.sleep(2)
-                continue
-
-            if translated:
-                print(f"[DEBUG] Successfully translated caption to Persian.")
-                return translated
+            if response.status_code == 200:
+                result = response.json()
+                if result and isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
+                    # Stitch together all translated segments preserving line breaks
+                    translated_segments = [item[0] for item in result[0] if item and item[0]]
+                    translated = "".join(translated_segments).strip()
+                    if translated:
+                        print(f"[DEBUG] Successfully translated caption to Persian.")
+                        return translated
+            else:
+                print(f"[DEBUG] Translation HTTP {response.status_code}. Retrying...")
+                
         except Exception as e:
             print(f"[DEBUG] Translation attempt {attempt + 1} failed: {e}")
             time.sleep(2)
