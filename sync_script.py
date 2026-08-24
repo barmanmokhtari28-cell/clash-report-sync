@@ -5,6 +5,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL_ID = os.environ["CHANNEL_ID"]
@@ -97,47 +98,75 @@ def scrape_channel():
 
     return parsed_posts
 
-def translate_to_persian(text, max_retries=3):
-    """
-    Translates text to Persian using Google's direct JSON endpoint (client=gtx).
-    Free, unlimited, requires no API keys or proxies, and won't trigger Google's HTML error blocks.
-    """
+def _translate_chunk_mymemory(chunk):
+    url = f"https://api.mymemory.translated.net/get?q={quote(chunk)}&langpair=en|fa&de=githubactions@syncbot.org"
+    res = requests.get(url, timeout=10)
+    if res.status_code == 200:
+        data = res.json()
+        translated = data.get("responseData", {}).get("translatedText", "")
+        if translated and not translated.startswith("MYMEMORY WARNING"):
+            return html.unescape(translated)
+    return None
+
+def _translate_chunk_lingva(chunk):
+    # Lingva public mirrors
+    mirrors = [
+        "https://lingva.ml/api/v1/en/fa/",
+        "https://translate.plausibility.cloud/api/v1/en/fa/",
+        "https://lingva.garudalinux.org/api/v1/en/fa/"
+    ]
+    for mirror in mirrors:
+        try:
+            url = mirror + quote(chunk)
+            res = requests.get(url, timeout=7)
+            if res.status_code == 200:
+                data = res.json()
+                trans = data.get("translation")
+                if trans:
+                    return trans
+        except Exception:
+            continue
+    return None
+
+def translate_to_persian(text):
     if not text or not text.strip():
         return ""
 
-    url = "https://translate.googleapis.com/translate_a/single"
-    params = {
-        "client": "gtx",
-        "sl": "auto",
-        "tl": "fa",
-        "dt": "t"
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
+    paragraphs = text.split("\n")
+    translated_paragraphs = []
 
-    for attempt in range(max_retries):
+    for p in paragraphs:
+        p_clean = p.strip()
+        if not p_clean:
+            translated_paragraphs.append("")
+            continue
+
+        trans = None
+        # Attempt 1: MyMemory API
         try:
-            # Using POST so large multi-paragraph captions don't exceed URL limits
-            response = requests.post(url, params=params, data={"q": text}, headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result and isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
-                    # Stitch together all translated segments preserving line breaks
-                    translated_segments = [item[0] for item in result[0] if item and item[0]]
-                    translated = "".join(translated_segments).strip()
-                    if translated:
-                        print(f"[DEBUG] Successfully translated caption to Persian.")
-                        return translated
-            else:
-                print(f"[DEBUG] Translation HTTP {response.status_code}. Retrying...")
-                
+            trans = _translate_chunk_mymemory(p_clean)
         except Exception as e:
-            print(f"[DEBUG] Translation attempt {attempt + 1} failed: {e}")
-            time.sleep(2)
+            print(f"[DEBUG] MyMemory error: {e}")
 
-    print("[DEBUG] Translation failed after max retries. Retaining original text as fallback.")
+        # Attempt 2: Lingva API
+        if not trans:
+            try:
+                trans = _translate_chunk_lingva(p_clean)
+            except Exception as e:
+                print(f"[DEBUG] Lingva error: {e}")
+
+        # Fallback: keep original text for this line if all failed
+        if trans:
+            translated_paragraphs.append(trans)
+        else:
+            translated_paragraphs.append(p_clean)
+
+    result = "\n".join(translated_paragraphs).strip()
+    if result and result != text:
+        print("[DEBUG] Successfully translated caption to Persian.")
+        return result
+
+    print("[DEBUG] Translation failed across all providers. Using original text.")
     return text
 
 def send_to_telegram(media_type, media_url, caption):
@@ -186,7 +215,6 @@ def main():
     print(f"[DEBUG] Scraped post IDs range from {posts[0]['id']} to {posts[-1]['id']}")
 
     if last_id == 0:
-        # First run / Reset state: Pull posts from the last 1 hour
         print("[DEBUG] First run or reset detected. Filtering posts from the last 1 hour...")
         new_posts = []
         now_utc = datetime.now(timezone.utc)
@@ -198,7 +226,6 @@ def main():
                     time_diff = now_utc - post_time
                     diff_seconds = time_diff.total_seconds()
 
-                    # If published in the last 1 hour (3600 seconds)
                     if 0 <= diff_seconds <= 3600:
                         new_posts.append(post)
                         print(f"[DEBUG] Post {post['id']} was published {int(diff_seconds // 60)} minutes ago. Selected.")
@@ -231,7 +258,6 @@ def main():
         # Signature and hashtags
         caption += f'<a href="{post["link"]}">Clash Report 🇹🇷</a>\n🫰@secretollah\n#خبر\n#سیاست'
 
-        # Decide media type
         if post["video_url"]:
             media_type = "video"
             media_url = post["video_url"]
@@ -253,7 +279,6 @@ def main():
             last_id = post["id"]
             save_last_processed_id(last_id)
         else:
-            # Fallback to text-only if media sending fails
             if media_type != "text":
                 print(f"[DEBUG] Media send failed. Retrying post {post['id']} as text-only.")
                 fallback_res = send_to_telegram("text", None, caption)
